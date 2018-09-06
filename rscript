@@ -1,0 +1,135 @@
+#load libraries
+library(readxl)
+library(ggplot2)
+library(raster)
+library(rgdal)
+library(rgeos)
+library(ggsn)
+library(spatialEco)
+library(dplyr)
+library(reshape2)
+library(extrafont)
+library(emojifont)
+
+#get a map of USA
+mapaUSA <- raster::getData("GADM", country="USA", level=1)
+#remove Alaska and Hawaii
+mapaUSA <- mapaUSA[!mapaUSA$NAME_1 == "Alaska",]
+mapaUSA <- mapaUSA[!mapaUSA$NAME_1 == "Hawaii",]
+
+#dissolve polygons within mapaUSA
+W <- gUnaryUnion(mapaUSA, id = mapaUSA@data$NAME_0)
+plot(W) #check
+
+#open data
+P <- read.table("starbucks_usa_light.txt", header=T, sep="\t", quote="", dec=".")
+
+#convert df to a spatial object
+coordinates(P) <- ~ lon+lat #transform the df to a SP
+proj4string(P) <- CRS("+proj=longlat +datum=WGS84") #provide a coordinate system
+
+#remove points that are out of W (i.e. in Alsaka and Hawai)
+Z <- P[mapaUSA,]
+Z <- data.frame(Z) #convert as a dataframe
+
+#all the points of P are within the points of W
+P@bbox <- W@bbox
+
+# Create an empty grid where n is the total number of cells 
+grd              <- as.data.frame(spsample(P, "regular", n=1000000))
+names(grd)       <- c("X", "Y")
+coordinates(grd) <- c("X", "Y")
+gridded(grd)     <- TRUE  # Create SpatialPixel object
+fullgrid(grd)    <- TRUE  # Create SpatialGrid object
+
+# Add P's projection information to the empty grid
+proj4string(grd) <- proj4string(P)
+
+#calculate distance between the points
+# (Might takes several hours, decrese the number of pixels in grd for faster rocessing)
+r2.d <- distanceFromPoints(grd, P) 
+
+#Get the coordinates of the cell centres and create a Spatial object
+spts <- rasterToPoints(r2.d, spatial = TRUE)
+
+#Transform the points to your desired target
+llprj <-  "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs +towgs84=0,0,0"
+llpts <- spTransform(spts, CRS(llprj))
+
+#Now to finish, turn it as a data.frame in order to be plotted with ggplot2
+raster <- as.data.frame(llpts)
+
+############################################################
+#if you desire to get only the points within USA
+coordinates(raster) <- ~x+y #first turn the df back to a spatial object
+proj4string(raster) <- CRS("+proj=longlat +datum=WGS84") #provide a coordinate system
+r.mUSA <- raster[W,] #remove all points outside of the map (might take some time as well)
+r.mUSA <- data.frame(r.mUSA) #turn it back to a dataframe
+############################################################
+
+############################################################
+#charge awesome fonts (if you want to plot the twitter logo)
+load.fontawesome()
+twitterlogo <- fontawesome(c('fa-twitter'))
+windows() #only necessary if using RStudio
+############################################################
+
+#plot the map
+g <- 
+  ggplot() +
+  
+  geom_raster(data=raster, aes(x=x, y=y, fill=layer)) + 
+  
+  geom_point(data = Z, aes(x=lon, y = lat), colour = "#F4FF02",
+             size=0.1, alpha=1, shape=20, 
+             fill = "#F4FF02") +
+             
+  coord_quickmap() +
+  
+  scale_fill_gradient2(low = "#F4FF02", mid = "#48af62", high = "black", 
+                       midpoint = 4, trans = "sqrt",
+                       guide=FALSE, na.value=NA, "") +
+                       
+  theme(panel.background=element_rect(fill = "black", colour = "black"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        legend.justification=c(0,0),
+        axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        axis.title.y=element_blank(),
+        axis.text.y=element_blank(),
+        axis.ticks.y=element_blank()) +
+        
+  annotate("text", x = -124, y = 29.5,
+           label = "The contiguous United States",
+           size=6.5, color ="white",
+           hjust=0) +
+  annotate("text", x = -124, y = 28.75,
+           label = "Visualized by distance to the nearest Starbucks",
+           size=6.5, color ="white",
+           hjust=0) +
+  
+  annotate("text", x = -122.75, y = 27.25, label = "@MathieuAvanzi", 
+           size=5.5, color ="white", 
+           hjust=0) +
+           
+  #geom_text(aes(x = -124, y = 27.25, label=twitterlogo), family='fontawesome-webfont', size=11, color="#1ca3f3", hjust=0) +
+            
+  annotate("text", x = -124, y = 25.5,
+           label = "Data retrieved from: www.kaggle.com/starbucks/store-locations",
+           size=5, color ="white",
+           hjust=0) + 
+
+  scalebar(data=NULL, dist = 300, dd2km = TRUE, model = 'WGS84',
+           x.min = -74, x.max = -70, y.min = 25.5, y.max = 27,
+           st.size = 4, height=0.1, 
+           st.dist=0.2, border.size = .1,
+           st.color="white",
+           box.fill=c("#48af62", "yellow"),
+           box.color="black")
+           
+g #display plot
+ggsave(g, filename = "starbucks_USA.png", scale=1, 
+       units="in", dpi=300,
+       width = 7, height = 5) 
